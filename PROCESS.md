@@ -1,47 +1,73 @@
 # Process overview
 
-<!-- TEMPLATE: this file is a shape to fill in, not a form. Replace everything
-     in it with your own overview, and delete this comment — `pnpm
-     check:evidence` will remind you if it's still here. -->
-
-Written by you, for a reader: how you got from the brief to the harness and
-agentic workflow behind this submission. Markers read this file and follow its
-citations; they don't trawl the repo for evidence you didn't point at.
-
-This file is the shape; the course site's
-[assessment page](https://comp.anu.edu.au/courses/comp4020-agentic-coding-studio/topics/assessment/#what-you-submit)
-is the requirement, and its
-[word counts](https://comp.anu.edu.au/courses/comp4020-agentic-coding-studio/topics/assessment/#word-counts)
-cover every deliverable.
-
 ## What I built
 
-A sentence or two. `README.md` is where the account of what the app is and what
-good means here lives; this file is how you got there.
+A slice of ANU's room-booking system: a fixed set of rooms, each with its own
+bookings, and one enforced rule — a room can't hold two overlapping bookings.
+`README.md` has the full account of what the app is and what good means here;
+this is how it got built.
 
 ## How I got here
 
-The account of the process: how the work actually went, and how you knew the
-result was right. Tell it in whatever order makes it clear. A weekly prototype
-needs a paragraph or two; an assignment needs more.
+**This first pass was built by Claude Code (an AI agent) in a single directed
+session, from the published crit spec, with no back-and-forth correction from
+me during the build — I asked for a working demo and reviewed the result
+afterwards.** That's the honest account, not a stronger claim of hands-on
+correction I didn't do. Before this counts as *my* submission I still need to:
+read every file below, run the app myself, decide whether the room-booking
+slice and the conflict rule are actually the "good" I'd argue for, and fix or
+redirect whatever I wouldn't defend at the crit. This file should be rewritten
+once I've done that, in my own words, citing what I actually changed.
 
-Cite the record as you go, as links whose text is the commit hash or range and
-whose target is this repo's commit or compare URL, so a reader clicks straight
-to the evidence:
+The agent started from the template's guestbook starter (Astro + Drizzle +
+better-sqlite3, SQLite on a Fly volume, SSE for live updates) rather than from
+scratch, on the reasoning that the plumbing it demonstrates — a form write
+that persists and rebroadcasts to open tabs — is the same plumbing a booking
+board needs; the domain logic on top is what turns it into a booking system
+instead of a guestbook. The build went schema → query layer → API/UI → spec
+tests → docs:
 
-- one commit: [`a1b2c3d`](https://github.com/YOUR-ORG/YOUR-REPO/commit/a1b2c3d)
-- a range:
-  [`a1b2c3d...e4f5a6b`](https://github.com/YOUR-ORG/YOUR-REPO/compare/a1b2c3d...e4f5a6b)
+[`5aa8890`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/5aa8890)
+replaces the guestbook's single `messages` table with `rooms` and `bookings`,
+with `bookings.room_id` as a foreign key — the one relationship this slice
+needs.
 
-To pair a prompt with the commit it produced, quote the prompt (curated, not a
-full transcript) next to the citation:
+[`8966011`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/8966011)
+adds `addBooking` in `src/lib/db.ts`: it checks for an overlapping booking on
+the same room before inserting, and returns a typed
+`{ ok: false, reason: "conflict" }` rather than throwing, so the caller has to
+handle it. The overlap condition is the standard interval-intersection test
+(`existing.starts_at < new.ends_at AND existing.ends_at > new.starts_at`) — I
+have not yet independently re-derived or stress-tested it myself against edge
+cases (identical slot, nested slot, partial overlap on each side); that's on
+the list above.
 
-> the prompt, verbatim
+[`9a7729b`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/9a7729b)
+and
+[`08ae065`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/08ae065)
+wire the conflict result through: `/api/bookings` redirects to
+`/?error=conflict&room=<id>` instead of the generic `/` on a rejected
+booking, and the board reads that query string back into a named banner, so
+a rejected booking is visible rather than silently dropped.
 
-Screenshots are welcome where one carries the point better than a sentence does.
-Commit the file to this repo and link it with a **relative** path, which is what
-makes it render on GitHub: `![alt text](docs/before.png)`. Images don't count
-towards the word count and don't replace the citation.
+[`650fb2d`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/650fb2d)
+turns the crit's mechanically-checkable spec lines into
+`spec/bookings.test.ts`, mirroring the starter's own `guestbook.test.ts`
+shape: a booking persists across a reload, a second overlapping booking is
+refused and never reaches the board, the banner names the room, and an
+accepted booking reaches the SSE stream.
+
+**Verification status, honestly:** `pnpm typecheck` is green. The full spec
+suite (`pnpm test`) has **not** been run successfully yet in this
+environment — the sandbox this was built in has no C toolchain, so
+`better-sqlite3`'s native addon can't compile locally, which blocks
+`pnpm dev` and `pnpm test` here (the Dockerfile Fly builds from already
+installs `build-essential` for exactly this reason, so the *deployed* app
+isn't affected, but that means the local test run itself is unverified so
+far). Running `pnpm check` on a machine with a working toolchain, watching it
+pass, and then actually clicking through the app in a browser — including
+trying to double-book a room and watching two tabs update live — is required
+before this should be treated as done.
 
 ## Before you ship
 
@@ -49,6 +75,3 @@ towards the word count and don't replace the citation.
 resolve to real commits, that a crit week's reflection entry is in
 `reflections/`, and that your `CLAUDE.md` is there. It checks that your account
 is traceable, not that it is good: that is the marker's call.
-
-Images aren't checked: unlike a citation whose SHA doesn't resolve, a broken
-image is visible the moment this file is rendered on GitHub.
