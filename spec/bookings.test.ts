@@ -78,9 +78,15 @@ describe("room bookings", () => {
 
   it("broadcasts an accepted booking over the SSE stream", async () => {
     const live = `${probe} live`;
-    // a slot after the first booking's, so it doesn't conflict
-    const laterStart = new Date(new Date(slotEnd).getTime() + 60 * 60_000).toISOString().slice(0, 16);
-    const laterEnd = new Date(new Date(laterStart).getTime() + 60 * 60_000).toISOString().slice(0, 16);
+    // a slot after the first booking's, so it doesn't conflict. slotEnd (and
+    // laterStart, once produced) are naive "YYYY-MM-DDTHH:MM" strings with no
+    // timezone marker — the same shape a browser's datetime-local input
+    // submits, and the app never attaches one either (see CLAUDE.md). `Date`
+    // parses a string like that as *local* time but `toISOString` always
+    // emits UTC, so appending "Z" before reparsing keeps both ends of this
+    // arithmetic in UTC and avoids a silent shift by the machine's offset.
+    const laterStart = new Date(new Date(`${slotEnd}Z`).getTime() + 60 * 60_000).toISOString().slice(0, 16);
+    const laterEnd = new Date(new Date(`${laterStart}Z`).getTime() + 60 * 60_000).toISOString().slice(0, 16);
 
     const stream = await fetch(new URL("/api/events", baseUrl));
     expect(stream.headers.get("content-type")).toContain("text/event-stream");
