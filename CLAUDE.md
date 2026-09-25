@@ -17,6 +17,15 @@
 - **Schema changes go through `pnpm db:generate`, never a hand-edited
   migration or a hand-edited database.** Edit `src/lib/schema.ts`, generate,
   commit both the schema and the migration it writes under `drizzle/`.
+- **A room's equipment is a comma-separated `TEXT` column**, same convention
+  and same reasoning as the datetime rule above: a small, fixed vocabulary
+  (`EQUIPMENT_TAGS` in `src/lib/db.ts`) doesn't earn a join table. Split it
+  with `roomEquipment()` rather than re-deriving the split elsewhere.
+- **A booking POST with no `roomId` is a search, never a write.** That branch
+  in `src/pages/api/bookings.ts` must only ever call `findAvailableRooms` and
+  redirect — it must never reach `addBooking`. If a future change adds more
+  ways to search, keep that boundary explicit rather than letting a search
+  path fall through into the booking path by accident.
 
 ## Process
 
