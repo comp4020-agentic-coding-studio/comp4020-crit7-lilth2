@@ -7,7 +7,7 @@ body {
 }
 
 main {
-  max-width: 40rem;
+  max-width: 48rem;
   margin: 0 auto;
 }
 
@@ -23,7 +23,14 @@ form {
   margin-block: 1.5rem;
 }
 
-input {
+form label {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  margin-block-end: -0.35rem;
+}
+
+input,
+select {
   flex: 1;
   min-width: 12rem;
   padding: 0.4rem 0.6rem;
@@ -35,6 +42,47 @@ button {
   font: inherit;
 }
 
-#messages {
+.banner {
+  padding: 0.75rem 1rem;
+  border-radius: 0.4rem;
+}
+
+.banner-error {
+  background: #fde8e8;
+  color: #7a1f1f;
+  border: 1px solid #f3b4b4;
+}
+
+.room {
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-block-end: 1rem;
+}
+
+.room h3 {
+  margin-block-end: 0.5rem;
+}
+
+.room-meta {
+  font-weight: normal;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.bookings {
   padding-inline-start: 1.2rem;
+  margin: 0;
+}
+
+.booked-by {
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.empty {
+  color: #777;
+  font-style: italic;
+  list-style: none;
+  padding-inline-start: 0;
 }

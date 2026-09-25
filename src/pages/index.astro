@@ -1,8 +1,27 @@
 ---
-import { listMessages } from "../lib/db";
+import { listBookings, listRooms } from "../lib/db";
 import "../styles.css";
 
-const messages = listMessages();
+const rooms = listRooms();
+const bookings = listBookings();
+
+const error = Astro.url.searchParams.get("error");
+const errorRoomId = Number(Astro.url.searchParams.get("room"));
+const errorRoom = rooms.find((room) => room.id === errorRoomId);
+
+const bookingsByRoom = new Map(rooms.map((room) => [room.id, bookings.filter((b) => b.roomId === room.id)]));
+
+function formatSlot(startsAt: string, endsAt: string): string {
+  const format = (iso: string) =>
+    new Date(iso).toLocaleString("en-AU", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  return `${format(startsAt)} – ${new Date(endsAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}`;
+}
 ---
 
 <!doctype html>
@@ -10,43 +29,105 @@ const messages = listMessages();
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>COMP4020 prototype</title>
+    <title>ANU room booking</title>
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Guestbook</a>
+      <a href="/">Book a room</a>
       <a href="/readme/">About</a>
     </nav>
     <main>
-      <h1>Guestbook</h1>
+      <h1>Book a room</h1>
       <p>
-        A minimal full-stack starter: messages live in SQLite on the machine's
-        volume (state survives a reload and a redeploy), and new messages
-        appear in every open tab over a server-sent-events stream — open this
-        page twice and sign it in one. Replace all of this with your own
-        prototype.
+        A slice of ANU's room-booking system: a fixed set of rooms, each with its own bookings, and
+        one rule that makes a room a real constraint instead of a label — two bookings for the same
+        room can't overlap. State lives in SQLite on the machine's volume, so it survives a reload and
+        a redeploy; new bookings appear on every open tab over a server-sent-events stream.
       </p>
-      <form method="post" action="/api/messages">
-        <label for="body">Leave a message</label>
-        <input id="body" name="body" required maxlength="500" />
-        <button>Sign</button>
+
+      {
+        error === "conflict" && (
+          <p role="alert" class="banner banner-error">
+            {errorRoom ? errorRoom.name : "That room"} is already booked for part of that time — pick
+            another slot.
+          </p>
+        )
+      }
+      {
+        error === "invalid" && (
+          <p role="alert" class="banner banner-error">
+            Fill in every field, and make sure the booking ends after it starts.
+          </p>
+        )
+      }
+
+      <form method="post" action="/api/bookings" id="booking-form">
+        <label for="roomId">Room</label>
+        <select id="roomId" name="roomId" required>
+          {rooms.map((room) => (
+            <option value={room.id} selected={room.id === errorRoomId}>
+              {room.name} ({room.building}, seats {room.capacity})
+            </option>
+          ))}
+        </select>
+
+        <label for="title">What for</label>
+        <input id="title" name="title" required maxlength="200" placeholder="Honours seminar" />
+
+        <label for="bookedBy">Your name</label>
+        <input id="bookedBy" name="bookedBy" required maxlength="200" placeholder="Jiaao" />
+
+        <label for="startsAt">Starts</label>
+        <input id="startsAt" name="startsAt" type="datetime-local" required />
+
+        <label for="endsAt">Ends</label>
+        <input id="endsAt" name="endsAt" type="datetime-local" required />
+
+        <button>Book it</button>
       </form>
-      <ul id="messages">
-        {messages.map((message) => <li>{message.body}</li>)}
-      </ul>
+
+      <section aria-labelledby="rooms-heading">
+        <h2 id="rooms-heading">Rooms</h2>
+        {
+          rooms.map((room) => (
+            <article class="room" data-room-id={room.id}>
+              <h3>
+                {room.name} <span class="room-meta">{room.building} &middot; seats {room.capacity}</span>
+              </h3>
+              <ul class="bookings" data-room-bookings={room.id}>
+                {(bookingsByRoom.get(room.id) ?? []).map((booking) => (
+                  <li>
+                    <strong>{booking.title}</strong> — {formatSlot(booking.startsAt, booking.endsAt)}
+                    <span class="booked-by"> (booked by {booking.bookedBy})</span>
+                  </li>
+                ))}
+                {(bookingsByRoom.get(room.id) ?? []).length === 0 && <li class="empty">No bookings yet</li>}
+              </ul>
+            </article>
+          ))
+        }
+      </section>
     </main>
     <script>
-      // The live half of the demo: subscribe to the SSE stream and prepend
-      // messages as they arrive. The form itself needs none of this — its
-      // POST + redirect re-renders the submitting tab from SQLite; this
-      // stream is how every other tab finds out.
-      const list = document.querySelector("#messages");
+      // The live half of the demo: subscribe to the SSE stream and drop each
+      // new booking into its room's list as it arrives. The form itself needs
+      // none of this — its POST + redirect re-renders the submitting tab from
+      // SQLite; this stream is how every *other* tab finds out.
       const source = new EventSource("/api/events");
       source.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
+        const booking = JSON.parse(event.data);
+        const list = document.querySelector(`[data-room-bookings="${booking.roomId}"]`);
+        if (!list) return;
+        const empty = list.querySelector(".empty");
+        empty?.remove();
         const item = document.createElement("li");
-        item.textContent = message.body;
-        list?.prepend(item);
+        const start = new Date(booking.startsAt);
+        const end = new Date(booking.endsAt);
+        const slot = `${start.toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} – ${end.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}`;
+        item.innerHTML = `<strong></strong> — ${slot}<span class="booked-by"></span>`;
+        item.querySelector("strong")!.textContent = booking.title;
+        item.querySelector(".booked-by")!.textContent = ` (booked by ${booking.bookedBy})`;
+        list.appendChild(item);
       });
     </script>
   </body>
