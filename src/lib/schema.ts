@@ -12,6 +12,10 @@ export const rooms = sqliteTable("rooms", {
   name: text().notNull().unique(),
   building: text().notNull(),
   capacity: int().notNull(),
+  // Comma-separated tag list (e.g. "projector,whiteboard") drawn from the
+  // fixed EQUIPMENT_TAGS vocabulary in src/lib/db.ts — same "plain text, no
+  // premature normalization" choice already made for datetimes below.
+  equipment: text().notNull().default(sql`''`),
 });
 
 export const bookings = sqliteTable("bookings", {
@@ -19,7 +23,8 @@ export const bookings = sqliteTable("bookings", {
   roomId: int("room_id")
     .notNull()
     .references(() => rooms.id),
-  title: text().notNull(),
+  // Nullable: a booking doesn't have to say what it's for.
+  title: text(),
   bookedBy: text("booked_by").notNull(),
   // "YYYY-MM-DDTHH:MM" strings (what <input type="datetime-local"> gives us)
   // — same-format text sorts and compares chronologically in SQL, so the
