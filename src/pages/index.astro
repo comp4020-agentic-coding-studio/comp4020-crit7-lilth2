@@ -1,13 +1,56 @@
 ---
-import { listBookings, listRooms } from "../lib/db";
+import { EQUIPMENT_TAGS, findAvailableRooms, listBookings, listRooms, roomEquipment } from "../lib/db";
 import "../styles.css";
 
 const rooms = listRooms();
 const bookings = listBookings();
 
-const error = Astro.url.searchParams.get("error");
-const errorRoomId = Number(Astro.url.searchParams.get("room"));
-const errorRoom = rooms.find((room) => room.id === errorRoomId);
+const params = Astro.url.searchParams;
+const error = params.get("error");
+const selectedRoomId = Number(params.get("room"));
+const selectedRoom = rooms.find((room) => room.id === selectedRoomId);
+
+// Every field the form can carry on a redirect — set by /api/bookings so a
+// visitor never loses what they typed across an error, a search, or a
+// conflict banner.
+const prefillTitle = params.get("title") ?? "";
+const prefillBookedBy = params.get("bookedBy") ?? "";
+const prefillStartsAt = params.get("startsAt") ?? "";
+const prefillEndsAt = params.get("endsAt") ?? "";
+const prefillMinSeats = params.get("minSeats") ?? "";
+const prefillMaxSeats = params.get("maxSeats") ?? "";
+const prefillEquipment = new Set(params.getAll("equipment"));
+
+function toNumberOrUndefined(value: string): number | undefined {
+  if (!value) return undefined;
+  const n = Number(value);
+  return Number.isNaN(n) ? undefined : n;
+}
+
+const isSearching = params.get("find") === "1";
+const suggestions =
+  isSearching && prefillStartsAt && prefillEndsAt
+    ? findAvailableRooms({
+        startsAt: prefillStartsAt,
+        endsAt: prefillEndsAt,
+        minSeats: toNumberOrUndefined(prefillMinSeats),
+        maxSeats: toNumberOrUndefined(prefillMaxSeats),
+        equipment: [...prefillEquipment],
+      })
+    : [];
+
+// A suggestion link carries every field the visitor already typed, plus this
+// room, back to / — no JS needed to "pick" a recommendation.
+function suggestionHref(roomId: number): string {
+  const qs = new URLSearchParams(params);
+  qs.delete("find");
+  qs.set("room", String(roomId));
+  return `/?${qs.toString()}`;
+}
+
+function equipmentLabel(tagId: string): string {
+  return EQUIPMENT_TAGS.find((tag) => tag.id === tagId)?.label ?? tagId;
+}
 
 const bookingsByRoom = new Map(rooms.map((room) => [room.id, bookings.filter((b) => b.roomId === room.id)]));
 
@@ -30,6 +73,12 @@ function formatSlot(startsAt: string, endsAt: string): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ANU room booking</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <nav aria-label="site">
@@ -48,43 +97,103 @@ function formatSlot(startsAt: string, endsAt: string): string {
       {
         error === "conflict" && (
           <p role="alert" class="banner banner-error">
-            {errorRoom ? errorRoom.name : "That room"} is already booked for part of that time — pick
-            another slot.
+            {selectedRoom ? selectedRoom.name : "That room"} is already booked for part of that time —
+            pick another slot.
           </p>
         )
       }
       {
         error === "invalid" && (
           <p role="alert" class="banner banner-error">
-            Fill in every field, and make sure the booking ends after it starts.
+            Fill in your name and a valid time range, with the booking ending after it starts.
           </p>
         )
       }
 
       <form method="post" action="/api/bookings" id="booking-form">
         <label for="roomId">Room</label>
-        <select id="roomId" name="roomId" required>
+        <select id="roomId" name="roomId">
+          <option value="" selected={!selectedRoom}>Not sure — recommend me one</option>
           {rooms.map((room) => (
-            <option value={room.id} selected={room.id === errorRoomId}>
+            <option value={room.id} selected={room.id === selectedRoomId}>
               {room.name} ({room.building}, seats {room.capacity})
             </option>
           ))}
         </select>
+        <p class="hint">Leave this as "Not sure" to search for a room instead of booking one directly.</p>
 
-        <label for="title">What for</label>
-        <input id="title" name="title" required maxlength="200" placeholder="Honours seminar" />
+        <label for="title">What for (optional)</label>
+        <input id="title" name="title" maxlength="200" placeholder="Honours seminar" value={prefillTitle} />
 
         <label for="bookedBy">Your name</label>
-        <input id="bookedBy" name="bookedBy" required maxlength="200" placeholder="Jiaao" />
+        <input
+          id="bookedBy"
+          name="bookedBy"
+          required
+          maxlength="200"
+          placeholder="Jiaao"
+          value={prefillBookedBy}
+        />
 
         <label for="startsAt">Starts</label>
-        <input id="startsAt" name="startsAt" type="datetime-local" required />
+        <input id="startsAt" name="startsAt" type="datetime-local" required value={prefillStartsAt} />
 
         <label for="endsAt">Ends</label>
-        <input id="endsAt" name="endsAt" type="datetime-local" required />
+        <input id="endsAt" name="endsAt" type="datetime-local" required value={prefillEndsAt} />
+
+        <label for="minSeats">Seats at least</label>
+        <input id="minSeats" name="minSeats" type="number" min="1" placeholder="e.g. 4" value={prefillMinSeats} />
+
+        <label for="maxSeats">Seats at most</label>
+        <input id="maxSeats" name="maxSeats" type="number" min="1" placeholder="e.g. 6" value={prefillMaxSeats} />
+
+        <fieldset class="equipment-fieldset">
+          <legend>Equipment needed (used when recommending a room)</legend>
+          {EQUIPMENT_TAGS.map((tag) => (
+            <label class="checkbox-label">
+              <input type="checkbox" name="equipment" value={tag.id} checked={prefillEquipment.has(tag.id)} />
+              {tag.label}
+            </label>
+          ))}
+        </fieldset>
 
         <button>Book it</button>
       </form>
+
+      {
+        isSearching && (
+          <section aria-labelledby="suggestions-heading" class="suggestions">
+            <h2 id="suggestions-heading">Suggested rooms</h2>
+            {suggestions.length === 0 ? (
+              <p>No rooms are free for that time — try a wider window or fewer requirements.</p>
+            ) : (
+              <ul class="suggestion-list">
+                {suggestions.map(({ room, matchedEquipment }) => (
+                  <li class="suggestion">
+                    <a href={suggestionHref(room.id)}>
+                      <strong>{room.name}</strong> — {room.building}, seats {room.capacity}
+                    </a>
+                    {roomEquipment(room).length > 0 && (
+                      <div class="tags">
+                        {roomEquipment(room).map((tagId) => (
+                          <span class={`tag ${matchedEquipment.includes(tagId) ? "tag-matched" : ""}`}>
+                            {equipmentLabel(tagId)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {prefillEquipment.size > 0 && (
+                      <p class="match-note">
+                        Matches {matchedEquipment.length} of {prefillEquipment.size} requested
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )
+      }
 
       <section aria-labelledby="rooms-heading">
         <h2 id="rooms-heading">Rooms</h2>
@@ -94,10 +203,17 @@ function formatSlot(startsAt: string, endsAt: string): string {
               <h3>
                 {room.name} <span class="room-meta">{room.building} &middot; seats {room.capacity}</span>
               </h3>
+              {roomEquipment(room).length > 0 && (
+                <div class="tags">
+                  {roomEquipment(room).map((tagId) => (
+                    <span class="tag">{equipmentLabel(tagId)}</span>
+                  ))}
+                </div>
+              )}
               <ul class="bookings" data-room-bookings={room.id}>
                 {(bookingsByRoom.get(room.id) ?? []).map((booking) => (
                   <li>
-                    <strong>{booking.title}</strong> — {formatSlot(booking.startsAt, booking.endsAt)}
+                    <strong>{booking.title ?? "Untitled booking"}</strong> — {formatSlot(booking.startsAt, booking.endsAt)}
                     <span class="booked-by"> (booked by {booking.bookedBy})</span>
                   </li>
                 ))}
@@ -125,7 +241,7 @@ function formatSlot(startsAt: string, endsAt: string): string {
         const end = new Date(booking.endsAt);
         const slot = `${start.toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} – ${end.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}`;
         item.innerHTML = `<strong></strong> — ${slot}<span class="booked-by"></span>`;
-        item.querySelector("strong")!.textContent = booking.title;
+        item.querySelector("strong")!.textContent = booking.title || "Untitled booking";
         item.querySelector(".booked-by")!.textContent = ` (booked by ${booking.bookedBy})`;
         list.appendChild(item);
       });

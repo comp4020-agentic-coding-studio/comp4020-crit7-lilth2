@@ -1,7 +1,24 @@
+/* Palette and type lifted from the real COMP4020 course site's compiled
+   CSS custom properties (--at-primary/--at-secondary/--at-tertiary/--at-link,
+   fetched directly from comp.anu.edu.au rather than guessed) — colors, font
+   and sharp-corner language only, not any ANU crest/lockup brand asset. */
+:root {
+  --anu-gold: #be830e;
+  --anu-gold-hover: #d4940f;
+  --anu-link: #9a6b0b; /* darker than --anu-gold for text contrast, same distinction the source site makes */
+  --anu-copper: #be4e0e;
+  --anu-teal: #0085ad;
+  --anu-error-bg: #fde8e8;
+  --anu-error-text: #7a1f1f;
+  --anu-error-border: #f3b4b4;
+  --anu-border: #ddd;
+  --anu-muted: #555;
+}
+
 body {
   margin: 0;
   padding: 2rem;
-  font-family: system-ui, sans-serif;
+  font-family: "Public Sans", system-ui, sans-serif;
   line-height: 1.6;
   color: #1a1a1a;
 }
@@ -11,8 +28,34 @@ main {
   margin: 0 auto;
 }
 
+h1,
+h2,
+h3 {
+  font-weight: 700;
+}
+
 a {
-  color: #0b5fff;
+  color: var(--anu-link);
+}
+
+nav {
+  max-width: 48rem;
+  margin: 0 auto 2rem;
+  padding-block-end: 0.75rem;
+  border-bottom: 3px solid var(--anu-gold);
+  display: flex;
+  gap: 1.5rem;
+}
+
+nav a {
+  color: var(--anu-link);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+nav a:hover {
+  color: var(--anu-gold-hover);
+  text-decoration: underline;
 }
 
 form {
@@ -29,33 +72,110 @@ form label {
   margin-block-end: -0.35rem;
 }
 
+.hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--anu-muted);
+}
+
 input,
 select {
   flex: 1;
   min-width: 12rem;
   padding: 0.4rem 0.6rem;
   font: inherit;
+  border: 1px solid var(--anu-border);
+  border-radius: 0;
+}
+
+.equipment-fieldset {
+  flex-basis: 100%;
+  border: 1px solid var(--anu-border);
+  border-radius: 0;
+  padding: 0.75rem 1rem;
+  margin-block: 0.25rem;
+}
+
+.equipment-fieldset legend {
+  font-size: 0.85rem;
+  padding-inline: 0.25rem;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-basis: auto;
+  font-size: 0.85rem;
+  margin-inline-end: 1rem;
+  margin-block-end: -0.35rem;
+}
+
+.checkbox-label input {
+  flex: none;
+  min-width: 0;
 }
 
 button {
-  padding: 0.4rem 1rem;
+  padding: 0.4rem 1.2rem;
   font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--anu-gold);
+  border: 1px solid var(--anu-gold);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--anu-gold-hover);
+  border-color: var(--anu-gold-hover);
 }
 
 .banner {
   padding: 0.75rem 1rem;
-  border-radius: 0.4rem;
+  border-radius: 0;
 }
 
 .banner-error {
-  background: #fde8e8;
-  color: #7a1f1f;
-  border: 1px solid #f3b4b4;
+  background: var(--anu-error-bg);
+  color: var(--anu-error-text);
+  border: 1px solid var(--anu-error-border);
+}
+
+.suggestions {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--anu-teal);
+  border-inline-start: 4px solid var(--anu-teal);
+}
+
+.suggestion-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.suggestion {
+  padding-block: 0.5rem;
+  border-block-end: 1px solid var(--anu-border);
+}
+
+.suggestion:last-child {
+  border-block-end: none;
+}
+
+.match-note {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--anu-muted);
 }
 
 .room {
-  border: 1px solid #ddd;
-  border-radius: 0.5rem;
+  border: 1px solid var(--anu-border);
+  border-inline-start: 4px solid var(--anu-copper);
+  border-radius: 0;
   padding: 0.75rem 1rem;
   margin-block-end: 1rem;
 }
@@ -67,7 +187,28 @@ button {
 .room-meta {
   font-weight: normal;
   font-size: 0.85rem;
-  color: #555;
+  color: var(--anu-muted);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block-end: 0.5rem;
+}
+
+.tag {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  background: #e3f4f8;
+  color: var(--anu-teal);
+  border: 1px solid var(--anu-teal);
+  border-radius: 0;
+}
+
+.tag-matched {
+  background: var(--anu-teal);
+  color: #fff;
 }
 
 .bookings {
@@ -76,7 +217,7 @@ button {
 }
 
 .booked-by {
-  color: #555;
+  color: var(--anu-muted);
   font-size: 0.9rem;
 }
 
