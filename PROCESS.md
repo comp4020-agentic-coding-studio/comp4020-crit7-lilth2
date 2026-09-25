@@ -84,6 +84,64 @@ through the app in an actual browser window (all of the above went through
 whether this slice and its conflict rule are the "good" you'd defend at the
 crit, are still yours to do.
 
+## Round two: room requirements, fuzzy recommendation, restyle
+
+After the first pass above, I asked for two more things: make the app look
+like the actual COMP4020 course site instead of a generic form, and let a
+visitor book without knowing which room they want — give them a title-
+optional booking, room equipment tags, and a recommendation when they only
+know a time range and some requirements.
+
+For the visual side, rather than guess at "ANU-ish", I fetched the real
+course site's compiled CSS and read its `--at-*` custom properties directly
+— gold `#be830e`, copper `#be4e0e`, teal `#0085ad`, a darker `#9a6b0b`
+specifically for link/text contrast, `border-radius: 0`, Public Sans — and
+reused only those (colour, type, spacing, sharp corners), not any ANU
+crest/lockup asset, on the app's own plain-text header.
+
+[`1bd7e1b`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/1bd7e1b)
+makes `bookings.title` nullable and adds `rooms.equipment` as a
+comma-separated tag column, via `pnpm db:generate` per `CLAUDE.md`.
+
+[`9521a12`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/9521a12)
+adds `findAvailableRooms` in `src/lib/db.ts`: a hard filter on availability
+(reusing the existing overlap check, exported as `isRoomBooked`) and a
+minimum seat count, then a soft ranking by equipment match count, seat-
+ceiling overshoot, and capacity — so an under-specified search still
+returns the closest rooms instead of nothing.
+
+[`d83364e`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/d83364e)
+turns `/api/bookings` into one endpoint with two outcomes: a `roomId`
+present books as before; absent, it's a search, and the handler redirects to
+`/?find=1&...` without ever calling `addBooking` — the query string carries
+every field the visitor typed so nothing is lost on the redirect.
+
+[`e7b1f74`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/e7b1f74)
+is the restyle plus the "Suggested rooms" UI: each suggestion is a plain
+link back to `/` with that room preselected via the same query-param-prefill
+pattern the conflict banner already used, so picking a recommendation needs
+no client JavaScript.
+
+[`0bde1a1`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/0bde1a1)
+extends `spec/bookings.test.ts`: a titleless booking renders as "Untitled
+booking" rather than an empty `<strong>`, a seat requirement only one seed
+room satisfies redirects to a search without writing anything and only that
+room is suggested, and a `room` query param preselects the right `<option>`
+on reload.
+
+**Verification, honestly:** `pnpm check` (typecheck, build, all 32 tests)
+was green on the run that produced the commits above — no new bug surfaced
+in this round the way the SSE timezone bug did in the first pass. I also
+re-ran the dev server and exercised the new paths with `curl` directly:
+confirmed the restyled page serves (`#be830e` and the "Not sure — recommend
+me one" option both present), confirmed a search for `minSeats=100`
+redirects to `/?find=1&...` and its suggestions section names only Copland
+G027 (the one 120-seat seed room) and not the three smaller ones, confirmed
+`/?room=4` renders that room's `<option>` with `selected`, and confirmed a
+booking submitted with an empty title renders as "Untitled booking". I have
+still not clicked through this in an actual browser window myself — that
+remains mine to do before I'd call this "good" rather than just "checked".
+
 ## Before you ship
 
 `pnpm check:evidence` verifies that this comment is gone, that your citations
