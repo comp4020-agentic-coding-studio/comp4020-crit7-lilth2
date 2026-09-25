@@ -63,7 +63,10 @@ describe("room bookings", () => {
     const clash = `${probe} clash`;
     const res = await post("/api/bookings", bookingForm({ title: clash }));
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe(`/?error=conflict&room=${ROOM_ID}`);
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.pathname).toBe("/");
+    expect(location.searchParams.get("error")).toBe("conflict");
+    expect(location.searchParams.get("room")).toBe(String(ROOM_ID));
 
     // rejected, so it never reaches the board
     const board = await fetch(baseUrl);
@@ -106,4 +109,59 @@ describe("room bookings", () => {
     expect(received).toContain(`data: `);
     expect(received).toContain(live);
   }, 10_000);
+
+  it("accepts a booking with no title and never renders it blank", async () => {
+    const marker = `spec-no-title-${process.hrtime.bigint()}`;
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 5 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base + 30 * 60_000).toISOString().slice(0, 16);
+
+    const res = await post("/api/bookings", bookingForm({ title: "", bookedBy: marker, startsAt: start, endsAt: end }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/");
+
+    const board = await fetch(baseUrl);
+    const html = await board.text();
+    expect(html).toContain(marker);
+    expect(html).toContain("Untitled booking");
+    // No booking, on any row, ever renders as an empty <strong></strong>.
+    // (The live-update <script> template literally contains that string as
+    // markup-to-be-filled-in, so exclude it — it's not rendered content.)
+    const bodyWithoutScript = html.split("<script")[0];
+    expect(bodyWithoutScript).not.toMatch(/<strong>\s*<\/strong>/);
+  });
+
+  it("a room requirement that only one room satisfies redirects to a search, without booking anything", async () => {
+    // "Copland G027" — the 120-seat lecture theatre, the 4th room seeded (see
+    // src/lib/db.ts) — is the only seed room with capacity >= 100.
+    const COPLAND_ROOM_ID = 4;
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 10 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base + 60 * 60_000).toISOString().slice(0, 16);
+
+    const res = await post(
+      "/api/bookings",
+      new URLSearchParams({ roomId: "", bookedBy: "spec-search", startsAt: start, endsAt: end, minSeats: "100" }),
+    );
+    expect(res.status).toBe(303);
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.pathname).toBe("/");
+    expect(location.searchParams.get("find")).toBe("1");
+    expect(location.searchParams.get("minSeats")).toBe("100");
+
+    const page = await fetch(new URL(`${location.pathname}${location.search}`, baseUrl));
+    const html = await page.text();
+    const suggestions = html.split('id="suggestions-heading"')[1]?.split('id="rooms-heading"')[0] ?? "";
+    expect(suggestions).toContain("Copland G027");
+    expect(suggestions).not.toContain("Hanna Neumann");
+    expect(suggestions).not.toContain("Marie Reay");
+
+    // this was a search, not a booking — confirm the room's own board entry
+    // wasn't touched by checking a suggestion link, not a submission, is what
+    // pre-selects it.
+    const preselect = await fetch(new URL(`/?room=${COPLAND_ROOM_ID}`, baseUrl));
+    const preselectHtml = await preselect.text();
+    const option = preselectHtml.match(new RegExp(`<option value="${COPLAND_ROOM_ID}"[^>]*>`))?.[0];
+    expect(option).toContain("selected");
+  });
 });
