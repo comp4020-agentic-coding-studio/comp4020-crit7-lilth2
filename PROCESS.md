@@ -57,17 +57,32 @@ shape: a booking persists across a reload, a second overlapping booking is
 refused and never reaches the board, the banner names the room, and an
 accepted booking reaches the SSE stream.
 
-**Verification status, honestly:** `pnpm typecheck` is green. The full spec
-suite (`pnpm test`) has **not** been run successfully yet in this
-environment — the sandbox this was built in has no C toolchain, so
-`better-sqlite3`'s native addon can't compile locally, which blocks
-`pnpm dev` and `pnpm test` here (the Dockerfile Fly builds from already
-installs `build-essential` for exactly this reason, so the *deployed* app
-isn't affected, but that means the local test run itself is unverified so
-far). Running `pnpm check` on a machine with a working toolchain, watching it
-pass, and then actually clicking through the app in a browser — including
-trying to double-book a room and watching two tabs update live — is required
-before this should be treated as done.
+**Verification status, honestly:** once a C toolchain became available in
+this environment, `pnpm check` (typecheck + build + the full vitest suite)
+went green — but not on the first run. `spec/bookings.test.ts`'s SSE test
+timed out: it derived a follow-up time slot by round-tripping a naive
+`"YYYY-MM-DDTHH:MM"` string through `new Date(...)` twice, and `Date`
+parses a string with no zone marker as *local* time while `.toISOString()`
+always emits UTC — so the round trip silently shifted the slot by the
+machine's UTC offset, landing `laterEnd` before `laterStart`. That tripped
+the app's own `startsAt < endsAt` validation, the booking came back
+`?error=invalid` instead of being accepted, and the test hung waiting for
+an SSE event that never fired. Fixed by parsing consistently as UTC
+(commit [`eed0d8d`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/eed0d8d)) —
+a bug in the test's own arithmetic, not in the app; a real browser's
+`datetime-local` input never round-trips through `toISOString` like this,
+so it wouldn't have surfaced outside the test.
+
+I also manually exercised the built server outside the test suite: booked
+a room, confirmed it persisted on reload, attempted a same-room
+overlapping booking and got the `already booked` banner rather than a
+silent double-booking, and opened a second SSE connection that received
+the new-booking event live while a booking was posted from elsewhere.
+All four behaved as `README.md` claims. What I have *not* done is click
+through the app in an actual browser window (all of the above went through
+`curl`/`fetch` against the built server) — that, and deciding for yourself
+whether this slice and its conflict rule are the "good" you'd defend at the
+crit, are still yours to do.
 
 ## Before you ship
 
