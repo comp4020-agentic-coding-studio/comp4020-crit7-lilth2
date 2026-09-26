@@ -142,6 +142,97 @@ booking submitted with an empty title renders as "Untitled booking". I have
 still not clicked through this in an actual browser window myself — that
 remains mine to do before I'd call this "good" rather than just "checked".
 
+## Round three: a third-party review, actually fixed
+
+I put the app in front of a written review (not a course requirement — I
+wanted a colder read than my own click-through) and asked for the flagged
+problems to be fixed, not just written up. The review's scope was
+deliberately narrow: make the existing booking flow clear and trustworthy,
+not grow it into a full campus system. Five things it found, and what
+changed:
+
+**The recommender's "fuzzy" ranking was too fuzzy.** Round two ranked
+*everything* — including a minimum seat count and wheelchair accessibility
+— as soft preferences, so a search that required an accessible room could
+still recommend one that wasn't. Commit
+[`c9d7df4`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/c9d7df4)
+splits that: time availability, `minSeats`, and `accessible` are now hard
+filters that exclude a room outright; `maxSeats` and the other equipment
+tags stay soft, surfaced as a separate "close matches" group with what's
+missing or overshooting named. A zero-result search now says *why* —
+capacity, requirements, or availability — instead of one generic empty
+state. The same commit makes `backfillSeedEquipment()` run on every boot,
+not just fix the function: a room seeded before migration `0001` added
+`equipment` upgrades with an empty string, which the empty-table seed can't
+repair since it only ever fires once.
+[`08b98da`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/08b98da)
+adds `spec/migration.test.ts`, which replays that exact upgrade against a
+real temporary SQLite file — apply migration `0000` alone, insert a
+pre-upgrade room, then let the app's own `migrate()` apply `0001` and run
+the backfill — rather than just checking the backfill function in
+isolation.
+
+**The search/booking split wasn't a real two-step flow.** Commit
+[`0928cf3`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/0928cf3)
+adds the server-side validation the client-only checks were leaning on
+(`minSeats <= maxSeats`, positive integers, a required seat count for a
+search) and fixes a real bug: an end-before-start submission used to drop
+the room you'd already picked, silently resetting the `<select>` to "Not
+sure" on the redirect back. The room param is now set before any
+validation redirect fires, not only on success, and every redirect anchors
+back to the form (`#search-form` or `#book-form`) the visitor was actually
+using.
+[`a472500`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/a472500)
+rebuilds the page around that: "Find available rooms" → exact/close
+suggestions, each with a "Select this room" link that carries every typed
+field into "Confirm booking", which stays open as its own entry point for
+anyone who already knows the room. Every field survives a selection, a
+back-edit, or a validation failure. Errors show both a page banner and a
+field-level message via `aria-describedby`. A successful booking gets an
+explicit confirmation (room, time, booker) and the new row is scrolled to
+and highlighted through a `#booking-<id>` fragment plus CSS `:target` —
+no client JS for either. Times are now always rendered with their year and
+labelled "(Canberra time)"; a cross-day booking shows the end's full date,
+not just its time, by anchoring the naive datetime string to UTC before
+formatting rather than letting it drift with the server's own OS timezone.
+The same commit sorts SSE-appended bookings into the position a page
+refresh would put them in, and shows a notice when a live update lands
+inside the time window the visitor is currently looking at suggestions
+for.
+
+**The visual contrast didn't hold up, and a nav link still said
+"Guestbook".**
+[`1fab736`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/1fab736)
+replaces the button and equipment-tag colours — the original white-on-gold
+(~3.26:1) and teal-on-tint (~3.74:1) both missed WCAG's 4.5:1 for normal
+text — with values checked by hand-computing relative luminance, since
+`spec/invariants.test.ts`'s axe check disables `color-contrast` under
+jsdom and can't verify this mechanically; the reasoning is in the
+stylesheet's own header comment. It also adds a responsive `.field-grid`
+(date/time fields side by side on desktop, stacked on mobile), wraps long
+room/tag/booking text instead of letting it overflow, adds a generic
+`:focus-visible` outline, and fixes the About page's leftover "Guestbook"
+link.
+
+[`08b98da`](https://github.com/comp4020-agentic-coding-studio/comp4020-crit7-lilth2/commit/08b98da)
+(same commit as the migration test above) also extends
+`spec/bookings.test.ts`: the new success-redirect shape, the min>max
+validation error, accessibility as a genuine hard filter that never
+appears as a close match, the exact/close split with its missing-equipment
+reasons, and the room-preserved-on-error fix.
+
+**Verification, honestly:** `pnpm check` (typecheck, build, all 37 tests —
+5 new since round two) is green on the commits above. I re-ran it after
+each commit, not just once at the end. I have *not* clicked through this
+round's changes in an actual browser window — everything above was
+verified through the built server's own HTTP responses (via the spec
+suite) rather than a real click-through, and doing that, plus deciding for
+myself whether the fixes actually read as clearer at the crit, is still
+mine to do. Out of this round's scope entirely, and reported rather than
+attempted: pushing this branch to the shared remote, and the Fly
+deployment — both need a decision (which branch, whether to redeploy at
+all before the crit) that isn't mine to make unilaterally mid-review.
+
 ## Before you ship
 
 `pnpm check:evidence` verifies that this comment is gone, that your citations
