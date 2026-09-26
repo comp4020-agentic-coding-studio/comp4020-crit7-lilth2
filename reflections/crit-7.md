@@ -1,19 +1,37 @@
-<!-- STUB — not a real reflection yet. This file needs to be written by you,
-     in your own voice, after you've actually directed/reviewed the build
-     yourself. Delete this comment and the prompts below once you have. -->
-
 ## What was the breakthrough that moved the work forward?
 
-(Your answer. If you had the agent build most of this in one pass from the
-spec, as happened here, an honest breakthrough might be about *what you
-checked or changed once you looked* — e.g. the moment you actually verified
-the overlap logic yourself, or decided the seeded room list was fine for a
-slice but would need to change for anything real — not a breakthrough that
-happened to the agent instead of you.)
+The breakthrough this round wasn't in the build itself — most of the ~20
+issues in the third-party review got implemented in one pass. It was in
+noticing that most of the review's complaints were really one problem in
+different clothes: the recommendation logic was treating things that should
+be non-negotiable (a room too small, already booked, or not actually
+wheelchair-accessible) the same way it treated genuine preferences (a nice-
+to-have projector) — ranking all of it on one scale instead of filtering some
+of it out entirely. Once I named that "hard filter vs. soft ranking" split
+explicitly, the fix for several of the review's separate complaints (a
+"close match" suggesting a genuinely inaccessible room, a dead-end search
+with no explanation of why) fell out of the same rule rather than needing
+separate patches. The moment that actually convinced me it worked wasn't the
+test suite going green — it was running the built server myself and
+confirming over real HTTP responses that a wheelchair-accessible search
+truly excludes the rooms that don't qualify, rather than just downgrading
+them.
 
 ## What did this work change about who I want to be as a software developer?
 
-(Your answer.)
+This round was less about writing code and more about directing an agent
+through *someone else's* critique of my own earlier work, which is a
+different kind of pressure than debugging code against my own instincts —
+a review isn't neutral, it's someone else's judgment about what "good"
+means for this product. The review didn't fully specify everything: which
+equipment tag counts as truly "hard" versus just nice-to-have, how many
+suggestions is enough before it's just noise, whether always showing the
+search form's equipment checkboxes is helpful context or clutter on the
+direct-booking path. I had to make those calls myself rather than either
+blindly following the review's wording or falling back on my original
+design by default. I want to keep being the person who makes those calls
+explicitly and can explain why, rather than the one who lets a review — or
+an agent implementing it — make them by omission.
 
 ## Real questions from this round, for you to actually answer
 
