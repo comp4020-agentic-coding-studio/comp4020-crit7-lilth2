@@ -1,18 +1,32 @@
 /* Palette and type lifted from the real COMP4020 course site's compiled
    CSS custom properties (--at-primary/--at-secondary/--at-tertiary/--at-link,
    fetched directly from comp.anu.edu.au rather than guessed) — colors, font
-   and sharp-corner language only, not any ANU crest/lockup brand asset. */
+   and sharp-corner language only, not any ANU crest/lockup brand asset.
+   --anu-gold-text, --anu-teal-text and the success tokens below were chosen
+   by hand-computing WCAG relative luminance (the axe check in
+   spec/invariants.test.ts can't verify contrast under jsdom, so this can't
+   be checked mechanically) to clear 4.5:1 for normal text, which the
+   original white-on-gold (~3.26:1) and teal-on-tint (~3.74:1) values didn't. */
 :root {
   --anu-gold: #be830e;
   --anu-gold-hover: #d4940f;
+  --anu-gold-text: #1a1a1a; /* on --anu-gold / --anu-gold-hover: ~5.3:1 / ~6.7:1 */
   --anu-link: #9a6b0b; /* darker than --anu-gold for text contrast, same distinction the source site makes */
   --anu-copper: #be4e0e;
-  --anu-teal: #0085ad;
+  --anu-teal: #0085ad; /* borders/accents only — not text, see --anu-teal-text */
+  --anu-teal-text: #00647f; /* on white or the light tag tint: ~5.9:1+ */
   --anu-error-bg: #fde8e8;
   --anu-error-text: #7a1f1f;
   --anu-error-border: #f3b4b4;
+  --anu-success-bg: #e6f4ea;
+  --anu-success-text: #1e5631;
+  --anu-success-border: #bfe3c8;
   --anu-border: #ddd;
   --anu-muted: #555;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
@@ -38,6 +52,11 @@ a {
   color: var(--anu-link);
 }
 
+:focus-visible {
+  outline: 3px solid var(--anu-teal-text);
+  outline-offset: 2px;
+}
+
 nav {
   max-width: 48rem;
   margin: 0 auto 2rem;
@@ -58,43 +77,70 @@ nav a:hover {
   text-decoration: underline;
 }
 
-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  margin-block: 1.5rem;
-}
-
-form label {
-  flex-basis: 100%;
-  font-size: 0.85rem;
-  margin-block-end: -0.35rem;
+section {
+  margin-block: 2rem;
 }
 
 .hint {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 0.8rem;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.85rem;
   color: var(--anu-muted);
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-block: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 640px) {
+  .field-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 input,
 select {
-  flex: 1;
-  min-width: 12rem;
-  padding: 0.4rem 0.6rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
   font: inherit;
   border: 1px solid var(--anu-border);
   border-radius: 0;
 }
 
+input[aria-describedby],
+select[aria-describedby] {
+  border-color: var(--anu-error-border);
+}
+
+.field-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--anu-error-text);
+}
+
 .equipment-fieldset {
-  flex-basis: 100%;
   border: 1px solid var(--anu-border);
   border-radius: 0;
   padding: 0.75rem 1rem;
-  margin-block: 0.25rem;
 }
 
 .equipment-fieldset legend {
@@ -106,31 +152,55 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  flex-basis: auto;
   font-size: 0.85rem;
   margin-inline-end: 1rem;
-  margin-block-end: -0.35rem;
+  margin-block-end: 0.35rem;
 }
 
 .checkbox-label input {
-  flex: none;
-  min-width: 0;
+  width: auto;
 }
 
-button {
-  padding: 0.4rem 1.2rem;
+.required-note {
+  font-size: 0.75rem;
+  color: var(--anu-muted);
+}
+
+button,
+.button-primary,
+.button-secondary {
+  display: inline-block;
+  padding: 0.5rem 1.2rem;
   font: inherit;
   font-weight: 600;
-  color: #fff;
-  background: var(--anu-gold);
-  border: 1px solid var(--anu-gold);
   border-radius: 0;
   cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  align-self: flex-start;
 }
 
-button:hover {
+button,
+.button-primary {
+  color: var(--anu-gold-text);
+  background: var(--anu-gold);
+  border: 1px solid var(--anu-gold);
+}
+
+button:hover,
+.button-primary:hover {
   background: var(--anu-gold-hover);
   border-color: var(--anu-gold-hover);
+}
+
+.button-secondary {
+  color: var(--anu-teal-text);
+  background: #fff;
+  border: 1px solid var(--anu-teal-text);
+}
+
+.button-secondary:hover {
+  background: #f0f8fa;
 }
 
 .banner {
@@ -144,11 +214,37 @@ button:hover {
   border: 1px solid var(--anu-error-border);
 }
 
+.banner-success {
+  background: var(--anu-success-bg);
+  color: var(--anu-success-text);
+  border: 1px solid var(--anu-success-border);
+}
+
+.banner-success a {
+  color: var(--anu-success-text);
+  font-weight: 600;
+}
+
 .suggestions {
-  margin-block: 1.5rem;
   padding: 1rem;
   border: 1px solid var(--anu-teal);
   border-inline-start: 4px solid var(--anu-teal);
+}
+
+.suggestion-group-heading {
+  font-size: 1rem;
+  margin-block: 1rem 0.5rem;
+}
+
+.no-results {
+  color: var(--anu-muted);
+}
+
+.stale-notice {
+  padding: 0.5rem 0.75rem;
+  background: var(--anu-error-bg);
+  color: var(--anu-error-text);
+  border: 1px solid var(--anu-error-border);
 }
 
 .suggestion-list {
@@ -158,7 +254,12 @@ button:hover {
 }
 
 .suggestion {
-  padding-block: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-block: 0.75rem;
   border-block-end: 1px solid var(--anu-border);
 }
 
@@ -166,10 +267,11 @@ button:hover {
   border-block-end: none;
 }
 
-.match-note {
-  margin: 0.25rem 0 0;
-  font-size: 0.85rem;
-  color: var(--anu-muted);
+.close-match-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block-start: 0.35rem;
 }
 
 .room {
@@ -182,12 +284,27 @@ button:hover {
 
 .room h3 {
   margin-block-end: 0.5rem;
+  overflow-wrap: anywhere;
 }
 
 .room-meta {
   font-weight: normal;
   font-size: 0.85rem;
   color: var(--anu-muted);
+}
+
+.availability {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.availability-free {
+  color: var(--anu-success-text);
+}
+
+.availability-booked {
+  color: var(--anu-error-text);
 }
 
 .tags {
@@ -201,19 +318,37 @@ button:hover {
   font-size: 0.75rem;
   padding: 0.15rem 0.5rem;
   background: #e3f4f8;
-  color: var(--anu-teal);
-  border: 1px solid var(--anu-teal);
+  color: var(--anu-teal-text);
+  border: 1px solid var(--anu-teal-text);
   border-radius: 0;
+  overflow-wrap: anywhere;
 }
 
 .tag-matched {
-  background: var(--anu-teal);
+  background: var(--anu-teal-text);
   color: #fff;
+}
+
+.tag-note {
+  background: #fff;
+  color: var(--anu-copper);
+  border-color: var(--anu-copper);
 }
 
 .bookings {
   padding-inline-start: 1.2rem;
   margin: 0;
+}
+
+.bookings li {
+  overflow-wrap: anywhere;
+  padding-inline: 0.15rem;
+}
+
+.bookings li:target {
+  background: #fff3d6;
+  outline: 2px solid var(--anu-gold);
+  outline-offset: 2px;
 }
 
 .booked-by {
@@ -226,4 +361,24 @@ button:hover {
   font-style: italic;
   list-style: none;
   padding-inline-start: 0;
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 1rem;
+  }
+
+  nav {
+    gap: 1rem;
+  }
+
+  .suggestion {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .button-primary,
+  .button-secondary {
+    align-self: stretch;
+  }
 }
