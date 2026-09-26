@@ -48,10 +48,24 @@ describe("room bookings", () => {
       ...overrides,
     });
 
-  it("accepts a booking and redirects back to the board", async () => {
+  it("accepts a booking and redirects to a success banner with a highlighted row", async () => {
     const res = await post("/api/bookings", bookingForm());
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/");
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.pathname).toBe("/");
+    expect(location.searchParams.get("success")).toBe("1");
+    expect(location.searchParams.get("room")).toBe(String(ROOM_ID));
+    expect(location.searchParams.get("bookedBy")).toBe("spec");
+    expect(location.searchParams.get("startsAt")).toBe(slotStart);
+    // the fragment both scrolls to and (via CSS :target) highlights this
+    // exact new booking's row, not just the room board in general.
+    expect(location.hash).toMatch(/^#booking-\d+$/);
+
+    const page = await fetch(new URL(`${location.pathname}${location.search}${location.hash}`, baseUrl));
+    const html = await page.text();
+    expect(html).toMatch(/role="status"/);
+    expect(html).toContain("Booked.");
+    expect(html).toContain("spec");
   });
 
   it("persists the booking: a fresh page load includes it", async () => {
@@ -118,7 +132,10 @@ describe("room bookings", () => {
 
     const res = await post("/api/bookings", bookingForm({ title: "", bookedBy: marker, startsAt: start, endsAt: end }));
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/");
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.pathname).toBe("/");
+    expect(location.searchParams.get("success")).toBe("1");
+    expect(location.searchParams.get("title")).toBeNull();
 
     const board = await fetch(baseUrl);
     const html = await board.text();
@@ -151,7 +168,10 @@ describe("room bookings", () => {
 
     const page = await fetch(new URL(`${location.pathname}${location.search}`, baseUrl));
     const html = await page.text();
-    const suggestions = html.split('id="suggestions-heading"')[1]?.split('id="rooms-heading"')[0] ?? "";
+    // Stop before "#book-form" — its <select> always lists every room (the
+    // direct-booking entry point deliberately isn't filtered by a search),
+    // so slicing any further would make every room name "appear" here.
+    const suggestions = html.split('id="suggestions-heading"')[1]?.split('<section id="book-form"')[0] ?? "";
     expect(suggestions).toContain("Copland G027");
     expect(suggestions).not.toContain("Hanna Neumann");
     expect(suggestions).not.toContain("Marie Reay");
@@ -163,5 +183,107 @@ describe("room bookings", () => {
     const preselectHtml = await preselect.text();
     const option = preselectHtml.match(new RegExp(`<option value="${COPLAND_ROOM_ID}"[^>]*>`))?.[0];
     expect(option).toContain("selected");
+  });
+
+  it("an end-before-start error keeps the selected room instead of resetting it to 'Not sure'", async () => {
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 15 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base - 30 * 60_000).toISOString().slice(0, 16); // before start: invalid range
+
+    const res = await post("/api/bookings", bookingForm({ startsAt: start, endsAt: end }));
+    expect(res.status).toBe(303);
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.searchParams.get("error")).toBe("invalid_range");
+    // the room the visitor had picked must survive the bounce back to "/" —
+    // it used to get dropped, resetting the <select> to its placeholder.
+    expect(location.searchParams.get("room")).toBe(String(ROOM_ID));
+
+    const page = await fetch(new URL(`${location.pathname}${location.search}${location.hash}`, baseUrl));
+    const html = await page.text();
+    const option = html.match(new RegExp(`<option value="${ROOM_ID}"[^>]*>`))?.[0];
+    expect(option).toContain("selected");
+  });
+
+  it("rejects a search where the minimum seat count is greater than the maximum", async () => {
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 16 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base + 60 * 60_000).toISOString().slice(0, 16);
+
+    const res = await post(
+      "/api/bookings",
+      new URLSearchParams({
+        roomId: "",
+        startsAt: start,
+        endsAt: end,
+        minSeats: "10",
+        maxSeats: "5",
+      }),
+    );
+    expect(res.status).toBe(303);
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    expect(location.searchParams.get("error")).toBe("bad_seats");
+    // both seat fields survive the bounce back to the search form.
+    expect(location.searchParams.get("minSeats")).toBe("10");
+    expect(location.searchParams.get("maxSeats")).toBe("5");
+  });
+
+  it("treats wheelchair accessibility as a hard filter, never a close-match suggestion", async () => {
+    // Only "Hanna Neumann 1.32" and "Copland G027" (see src/lib/db.ts) carry
+    // the accessible tag; a small minSeats keeps every other seed room in
+    // capacity range so this isolates the equipment filter specifically.
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 17 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base + 60 * 60_000).toISOString().slice(0, 16);
+
+    const res = await post(
+      "/api/bookings",
+      new URLSearchParams({ roomId: "", startsAt: start, endsAt: end, minSeats: "1", equipment: "accessible" }),
+    );
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    const page = await fetch(new URL(`${location.pathname}${location.search}`, baseUrl));
+    const html = await page.text();
+    const suggestions = html.split('id="suggestions-heading"')[1]?.split('<section id="book-form"')[0] ?? "";
+    expect(suggestions).toContain("Hanna Neumann");
+    expect(suggestions).toContain("Copland G027");
+    // a room without the required tag must not appear at all — not even as
+    // a "close" match with a "Missing: Wheelchair accessible" note.
+    expect(suggestions).not.toContain("CSIT N101");
+    expect(suggestions).not.toContain("Marie Reay");
+  });
+
+  it("splits results into exact and close matches, naming what a close match is missing", async () => {
+    // "Marie Reay 4.03" has exactly {projector, whiteboard} — an exact fit
+    // for this request. "CSIT N101" (projector only) and "Hanna Neumann
+    // 1.32" (whiteboard only) each qualify on capacity but are missing one
+    // of the two preferred (non-hard) tags, so they're "close" matches.
+    const base = Date.now() + Number(process.hrtime.bigint() % 1_000_000n) * 60_000 + 18 * 60 * 60_000;
+    const start = new Date(base).toISOString().slice(0, 16);
+    const end = new Date(base + 60 * 60_000).toISOString().slice(0, 16);
+
+    // No maxSeats given deliberately — this isolates the equipment matching
+    // from the capacity-overshoot ranking signal, which is covered by the
+    // "close matches" reasons directly instead.
+    const res = await post(
+      "/api/bookings",
+      new URLSearchParams([
+        ["roomId", ""],
+        ["startsAt", start],
+        ["endsAt", end],
+        ["minSeats", "1"],
+        ["equipment", "projector"],
+        ["equipment", "whiteboard"],
+      ]),
+    );
+    const location = new URL(res.headers.get("location") ?? "", baseUrl);
+    const page = await fetch(new URL(`${location.pathname}${location.search}`, baseUrl));
+    const html = await page.text();
+    const suggestions = html.split('id="suggestions-heading"')[1]?.split('<section id="book-form"')[0] ?? "";
+
+    const exactSection = suggestions.split("Exact matches")[1]?.split("Close matches")[0] ?? "";
+    const closeSection = suggestions.split("Close matches")[1] ?? "";
+    expect(exactSection).toContain("Marie Reay 4.03");
+    expect(closeSection).toContain("CSIT N101");
+    expect(closeSection).toMatch(/Missing:\s*Whiteboard/);
+    expect(closeSection).not.toContain("Marie Reay 4.03");
   });
 });
