@@ -28,14 +28,24 @@ migrate(db, { migrationsFolder: "./drizzle" });
 // comma-separated tags from (see src/lib/schema.ts). A small, closed set
 // keeps the search below simple string matching instead of needing a
 // separate join table for what's still a handful of possible tags.
+//
+// `hard: true` marks a tag that, once requested, is never negotiable — a
+// room without it isn't a fit, fuzzy or not. Only wheelchair accessibility
+// is hard today: it's an access requirement, not a preference like "has a
+// whiteboard", so findAvailableRooms below must never rank around it the
+// way it ranks around the others.
 export const EQUIPMENT_TAGS = [
-  { id: "projector", label: "Projector / display screen" },
-  { id: "whiteboard", label: "Whiteboard" },
-  { id: "video_conferencing", label: "Video conferencing" },
-  { id: "accessible", label: "Wheelchair accessible" },
+  { id: "projector", label: "Projector / display screen", hard: false },
+  { id: "whiteboard", label: "Whiteboard", hard: false },
+  { id: "video_conferencing", label: "Video conferencing", hard: false },
+  { id: "accessible", label: "Wheelchair accessible", hard: true },
 ] as const;
 
 export type EquipmentTagId = (typeof EQUIPMENT_TAGS)[number]["id"];
+
+function equipmentLabel(tagId: string): string {
+  return EQUIPMENT_TAGS.find((tag) => tag.id === tagId)?.label ?? tagId;
+}
 
 // Seed the handful of rooms this slice books against. Idempotent so it's
 // safe to run on every boot: the real ANU room catalogue is out of scope for
@@ -72,10 +82,33 @@ if (db.select().from(rooms).all().length === 0) {
   }
 }
 
+// The `equipment` column was added by a later migration (drizzle/0001) with
+// a `''` default, so a room that already existed on someone's deployed
+// volume upgrades into an *empty* equipment string, not the seed's real
+// tags — the seeding block above only ever fires on a table with zero rows,
+// so it can't fix that up. Run this on every boot, unconditionally: for each
+// known seed room that exists but still has no equipment recorded, fill in
+// the tags the current seed list says it should have. It only ever touches
+// a row that both matches a seed name and is still blank, so it's a no-op
+// once a deployment has caught up.
+export function backfillSeedEquipment(): void {
+  for (const seed of seedRooms) {
+    const existing = db.select().from(rooms).where(eq(rooms.name, seed.name)).get();
+    if (existing && !existing.equipment) {
+      db.update(rooms).set({ equipment: seed.equipment }).where(eq(rooms.id, existing.id)).run();
+    }
+  }
+}
+backfillSeedEquipment();
+
 export type { Booking, Room };
 
 export function listRooms(): Room[] {
   return db.select().from(rooms).orderBy(asc(rooms.name)).all();
+}
+
+export function getRoom(id: number): Room | undefined {
+  return db.select().from(rooms).where(eq(rooms.id, id)).get();
 }
 
 export function listBookings(): Booking[] {
@@ -100,46 +133,96 @@ export function isRoomBooked(roomId: number, startsAt: string, endsAt: string): 
   return clashes.length > 0;
 }
 
-export type RoomSuggestion = { room: Room; matchedEquipment: string[] };
+export type RoomMatch = {
+  room: Room;
+  // Preferred (non-hard) tags the visitor asked for that this room doesn't
+  // have — empty means it has all of them. Never includes a hard tag: a
+  // room that lacks one is filtered out entirely, never shown as "close".
+  missingEquipment: string[];
+  // How many seats this room has over the requested ceiling (0 if within it
+  // or no ceiling was given).
+  overshoot: number;
+  // No missing preferred equipment and no overshoot — a full fit, not just
+  // the closest available one.
+  exact: boolean;
+};
 
-// The recommender behind "just tell me what fits". Availability and a seat
-// floor are hard filters — a booked or too-small room is never a fit, fuzzy
-// or not. Equipment match and how far a room overshoots the requested seat
-// ceiling are soft ranking signals instead: there's no hard seat ceiling, so
-// a search that nothing fits exactly still returns the closest rooms rather
-// than nothing.
+export type RoomSearchResult =
+  | { ok: true; exact: RoomMatch[]; close: RoomMatch[] }
+  | {
+      // Why zero rooms qualified, so the page can say something more useful
+      // than "nothing's free": no room is even that big (capacity), a big
+      // enough room exists but none has a requested hard requirement
+      // (requirements), or a room fitting both exists but every one of them
+      // is booked for that slot (availability).
+      ok: false;
+      reason: "capacity" | "requirements" | "availability";
+      largestCapacity: number;
+    };
+
+// The recommender behind "just tell me what fits". Time availability, the
+// seat floor, and any hard (accessibility) equipment tag are hard filters —
+// none of them is negotiable, fuzzy or not. A requested seat ceiling and any
+// non-hard equipment tag are soft ranking signals instead: a room that
+// overshoots the ceiling or is missing a nice-to-have still shows, just
+// ranked as a "close" match rather than an exact one, with what's different
+// about it named explicitly.
 export function findAvailableRooms(input: {
   startsAt: string;
   endsAt: string;
-  minSeats?: number;
+  minSeats: number;
   maxSeats?: number;
   equipment?: string[];
-}): RoomSuggestion[] {
+}): RoomSearchResult {
   const requested = input.equipment ?? [];
+  const requiredTags = requested.filter((id) => EQUIPMENT_TAGS.find((tag) => tag.id === id)?.hard);
+  const preferredTags = requested.filter((id) => !requiredTags.includes(id));
 
-  const available = listRooms().filter((room) => {
-    if (input.minSeats !== undefined && room.capacity < input.minSeats) return false;
-    return !isRoomBooked(room.id, input.startsAt, input.endsAt);
+  const allRooms = listRooms();
+  const largestCapacity = allRooms.reduce((max, room) => Math.max(max, room.capacity), 0);
+
+  const bigEnough = allRooms.filter((room) => room.capacity >= input.minSeats);
+  if (bigEnough.length === 0) {
+    return { ok: false, reason: "capacity", largestCapacity };
+  }
+
+  const meetsRequirements = bigEnough.filter((room) => {
+    const have = new Set(roomEquipment(room));
+    return requiredTags.every((tag) => have.has(tag));
+  });
+  if (meetsRequirements.length === 0) {
+    return { ok: false, reason: "requirements", largestCapacity };
+  }
+
+  const available = meetsRequirements.filter((room) => !isRoomBooked(room.id, input.startsAt, input.endsAt));
+  if (available.length === 0) {
+    return { ok: false, reason: "availability", largestCapacity };
+  }
+
+  const matches: RoomMatch[] = available.map((room) => {
+    const have = new Set(roomEquipment(room));
+    const missingEquipment = preferredTags.filter((tag) => !have.has(tag));
+    const overshoot =
+      input.maxSeats !== undefined && room.capacity > input.maxSeats ? room.capacity - input.maxSeats : 0;
+    return { room, missingEquipment, overshoot, exact: missingEquipment.length === 0 && overshoot === 0 };
   });
 
-  return available
-    .map((room) => {
-      const have = new Set(roomEquipment(room));
-      const matchedEquipment = requested.filter((tag) => have.has(tag));
-      const overshoot =
-        input.maxSeats !== undefined && room.capacity > input.maxSeats ? room.capacity - input.maxSeats : 0;
-      return { room, matchedEquipment, overshoot };
-    })
-    .sort((a, b) => {
-      if (b.matchedEquipment.length !== a.matchedEquipment.length) {
-        return b.matchedEquipment.length - a.matchedEquipment.length;
-      }
-      if (a.overshoot !== b.overshoot) return a.overshoot - b.overshoot;
-      return a.room.capacity - b.room.capacity;
-    })
-    .slice(0, 5)
-    .map(({ room, matchedEquipment }) => ({ room, matchedEquipment }));
+  matches.sort((a, b) => {
+    if (a.missingEquipment.length !== b.missingEquipment.length) {
+      return a.missingEquipment.length - b.missingEquipment.length;
+    }
+    if (a.overshoot !== b.overshoot) return a.overshoot - b.overshoot;
+    return a.room.capacity - b.room.capacity;
+  });
+
+  return {
+    ok: true,
+    exact: matches.filter((m) => m.exact).slice(0, 5),
+    close: matches.filter((m) => !m.exact).slice(0, 5),
+  };
 }
+
+export { equipmentLabel };
 
 export type BookingResult = { ok: true; booking: Booking } | { ok: false; reason: "conflict" };
 
