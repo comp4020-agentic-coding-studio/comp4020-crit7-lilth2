@@ -1,5 +1,13 @@
 ---
-import { EQUIPMENT_TAGS, findAvailableRooms, listBookings, listRooms, roomEquipment } from "../lib/db";
+import {
+  EQUIPMENT_TAGS,
+  equipmentLabel,
+  findAvailableRooms,
+  isRoomBooked,
+  listBookings,
+  listRooms,
+  roomEquipment,
+} from "../lib/db";
 import "../styles.css";
 
 const rooms = listRooms();
@@ -7,12 +15,13 @@ const bookings = listBookings();
 
 const params = Astro.url.searchParams;
 const error = params.get("error");
+const success = params.get("success") === "1";
 const selectedRoomId = Number(params.get("room"));
 const selectedRoom = rooms.find((room) => room.id === selectedRoomId);
 
-// Every field the form can carry on a redirect — set by /api/bookings so a
-// visitor never loses what they typed across an error, a search, or a
-// conflict banner.
+// Every field either form can carry on a redirect — set by /api/bookings so a
+// visitor never loses what they typed across an error, a search, a selection,
+// or a conflict banner.
 const prefillTitle = params.get("title") ?? "";
 const prefillBookedBy = params.get("bookedBy") ?? "";
 const prefillStartsAt = params.get("startsAt") ?? "";
@@ -20,6 +29,7 @@ const prefillEndsAt = params.get("endsAt") ?? "";
 const prefillMinSeats = params.get("minSeats") ?? "";
 const prefillMaxSeats = params.get("maxSeats") ?? "";
 const prefillEquipment = new Set(params.getAll("equipment"));
+const hasTimeWindow = Boolean(prefillStartsAt && prefillEndsAt);
 
 function toNumberOrUndefined(value: string): number | undefined {
   if (!value) return undefined;
@@ -28,43 +38,103 @@ function toNumberOrUndefined(value: string): number | undefined {
 }
 
 const isSearching = params.get("find") === "1";
-const suggestions =
-  isSearching && prefillStartsAt && prefillEndsAt
+const minSeatsNum = toNumberOrUndefined(prefillMinSeats);
+const searchResult =
+  isSearching && prefillStartsAt && prefillEndsAt && minSeatsNum !== undefined
     ? findAvailableRooms({
         startsAt: prefillStartsAt,
         endsAt: prefillEndsAt,
-        minSeats: toNumberOrUndefined(prefillMinSeats),
+        minSeats: minSeatsNum,
         maxSeats: toNumberOrUndefined(prefillMaxSeats),
         equipment: [...prefillEquipment],
       })
-    : [];
+    : undefined;
 
-// A suggestion link carries every field the visitor already typed, plus this
-// room, back to / — no JS needed to "pick" a recommendation.
-function suggestionHref(roomId: number): string {
+const requestedHardTags = [...prefillEquipment].filter(
+  (id) => EQUIPMENT_TAGS.find((tag) => tag.id === id)?.hard,
+);
+
+// Flattened out of the RoomSearchResult union here, once, so the template
+// below never has to re-narrow `searchResult.ok` through JSX conditionals.
+const exactMatches = searchResult?.ok ? searchResult.exact : [];
+const closeMatches = searchResult?.ok ? searchResult.close : [];
+const failReason = searchResult && !searchResult.ok ? searchResult.reason : undefined;
+const failLargestCapacity = searchResult && !searchResult.ok ? searchResult.largestCapacity : undefined;
+
+// A "select this room" link carries every field the visitor already typed,
+// plus this room, back to / — no JS needed to move from a suggestion into
+// the confirm-booking form.
+function selectRoomHref(roomId: number): string {
   const qs = new URLSearchParams(params);
   qs.delete("find");
   qs.set("room", String(roomId));
-  return `/?${qs.toString()}`;
+  return `/?${qs.toString()}#book-form`;
 }
 
-function equipmentLabel(tagId: string): string {
-  return EQUIPMENT_TAGS.find((tag) => tag.id === tagId)?.label ?? tagId;
+// Field-level error routing. invalid_room / missing_name / conflict only
+// ever come from the confirm-booking form (it's the only form with a roomId
+// or a name field); missing_seats / invalid_seats / bad_seats only ever come
+// from the search form (it's the only one with seat-count fields). The two
+// date-range codes are shared by both forms — the redirect only sets `room`
+// once roomId validation has already passed on the book-form path, so its
+// presence is what tells the two apart here.
+const bookFormErrors: Record<string, string> = {};
+const searchFormErrors: Record<string, string> = {};
+let bannerError: string | null = null;
+switch (error) {
+  case "conflict":
+    bannerError = `${selectedRoom ? selectedRoom.name : "That room"} is already booked for part of that time — pick another slot or room below.`;
+    break;
+  case "invalid_room":
+    bannerError = "Choose a room from the list before confirming.";
+    bookFormErrors.roomId = "Choose a room.";
+    break;
+  case "missing_name":
+    bannerError = "Enter your name to confirm the booking.";
+    bookFormErrors.bookedBy = "Required.";
+    break;
+  case "missing_seats":
+    bannerError = "Enter how many people need a seat.";
+    searchFormErrors.minSeats = "Required to search.";
+    break;
+  case "invalid_seats":
+    bannerError = "Seat counts must be whole numbers of 1 or more.";
+    break;
+  case "bad_seats":
+    bannerError = "The minimum can't be more than the maximum.";
+    searchFormErrors.maxSeats = "Must be at least the minimum.";
+    break;
+  case "invalid_dates":
+    bannerError = "Enter a valid start and end time.";
+    (selectedRoom ? bookFormErrors : searchFormErrors).startsAt = "Enter a valid date and time.";
+    break;
+  case "invalid_range":
+    bannerError = "The end time must be after the start time.";
+    (selectedRoom ? bookFormErrors : searchFormErrors).endsAt = "Must be after the start time.";
+    break;
 }
 
 const bookingsByRoom = new Map(rooms.map((room) => [room.id, bookings.filter((b) => b.roomId === room.id)]));
 
-function formatSlot(startsAt: string, endsAt: string): string {
-  const format = (iso: string) =>
-    new Date(iso).toLocaleString("en-AU", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  return `${format(startsAt)} – ${new Date(endsAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}`;
+// Renders a "YYYY-MM-DDTHH:MM" string (see CLAUDE.md — no timezone marker,
+// always Canberra wall-clock) by anchoring it to UTC before formatting, and
+// formatting back out with an explicit UTC timeZone — this guarantees the
+// displayed value exactly echoes what was typed, regardless of the server's
+// own OS timezone. Always includes the year and, on a cross-day booking,
+// the end's full date too, rather than just its time.
+function formatPart(naive: string, opts: Intl.DateTimeFormatOptions): string {
+  return new Date(`${naive}:00Z`).toLocaleString("en-AU", { ...opts, timeZone: "UTC" });
 }
+const dateOpts: Intl.DateTimeFormatOptions = { weekday: "short", day: "numeric", month: "short", year: "numeric" };
+const timeOpts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+function formatSlot(startsAt: string, endsAt: string): string {
+  const start = `${formatPart(startsAt, dateOpts)}, ${formatPart(startsAt, timeOpts)}`;
+  const sameDay = startsAt.slice(0, 10) === endsAt.slice(0, 10);
+  const end = sameDay ? formatPart(endsAt, timeOpts) : `${formatPart(endsAt, dateOpts)}, ${formatPart(endsAt, timeOpts)}`;
+  return `${start} – ${end}`;
+}
+
+const successRoom = success ? rooms.find((room) => room.id === selectedRoomId) : undefined;
 ---
 
 <!doctype html>
@@ -87,163 +157,343 @@ function formatSlot(startsAt: string, endsAt: string): string {
     </nav>
     <main>
       <h1>Book a room</h1>
-      <p>
-        A slice of ANU's room-booking system: a fixed set of rooms, each with its own bookings, and
-        one rule that makes a room a real constraint instead of a label — two bookings for the same
-        room can't overlap. State lives in SQLite on the machine's volume, so it survives a reload and
-        a redeploy; new bookings appear on every open tab over a server-sent-events stream.
-      </p>
+      <p>Find an available ANU room for your next study session, or book one you already know.</p>
 
       {
-        error === "conflict" && (
-          <p role="alert" class="banner banner-error">
-            {selectedRoom ? selectedRoom.name : "That room"} is already booked for part of that time —
-            pick another slot.
+        success && (
+          <p role="status" class="banner banner-success">
+            <strong>Booked.</strong> {successRoom?.name ?? "Your room"} is confirmed for{" "}
+            {prefillStartsAt && prefillEndsAt && formatSlot(prefillStartsAt, prefillEndsAt)} (Canberra time) —
+            booked by {prefillBookedBy}
+            {prefillTitle && <> for “{prefillTitle}”</>}.{" "}
+            <a href="/">Book another room</a>
           </p>
         )
       }
-      {
-        error === "invalid" && (
-          <p role="alert" class="banner banner-error">
-            Fill in your name and a valid time range, with the booking ending after it starts.
-          </p>
-        )
-      }
+      {bannerError && <p role="alert" class="banner banner-error">{bannerError}</p>}
 
-      <form method="post" action="/api/bookings" id="booking-form">
-        <label for="roomId">Room</label>
-        <select id="roomId" name="roomId">
-          <option value="" selected={!selectedRoom}>Not sure — recommend me one</option>
-          {rooms.map((room) => (
-            <option value={room.id} selected={room.id === selectedRoomId}>
-              {room.name} ({room.building}, seats {room.capacity})
-            </option>
-          ))}
-        </select>
-        <p class="hint">Leave this as "Not sure" to search for a room instead of booking one directly.</p>
+      <section id="search-form" aria-labelledby="search-heading">
+        <h2 id="search-heading">Find available rooms</h2>
+        <form method="post" action="/api/bookings">
+          <div class="field-grid">
+            <div class="field">
+              <label for="search-startsAt">Starts (Canberra time)</label>
+              <input
+                id="search-startsAt"
+                name="startsAt"
+                type="datetime-local"
+                required
+                value={prefillStartsAt}
+                aria-describedby={searchFormErrors.startsAt ? "search-startsAt-error" : undefined}
+              />
+              {searchFormErrors.startsAt && (
+                <p id="search-startsAt-error" class="field-error">{searchFormErrors.startsAt}</p>
+              )}
+            </div>
+            <div class="field">
+              <label for="search-endsAt">Ends (Canberra time)</label>
+              <input
+                id="search-endsAt"
+                name="endsAt"
+                type="datetime-local"
+                required
+                value={prefillEndsAt}
+                aria-describedby={searchFormErrors.endsAt ? "search-endsAt-error" : undefined}
+              />
+              {searchFormErrors.endsAt && <p id="search-endsAt-error" class="field-error">{searchFormErrors.endsAt}</p>}
+            </div>
+          </div>
 
-        <label for="title">What for (optional)</label>
-        <input id="title" name="title" maxlength="200" placeholder="Honours seminar" value={prefillTitle} />
+          <div class="field-grid">
+            <div class="field">
+              <label for="search-minSeats">Seats needed (at least)</label>
+              <input
+                id="search-minSeats"
+                name="minSeats"
+                type="number"
+                min="1"
+                required
+                placeholder="e.g. 4"
+                value={prefillMinSeats}
+                aria-describedby={searchFormErrors.minSeats ? "search-minSeats-error" : undefined}
+              />
+              {searchFormErrors.minSeats && (
+                <p id="search-minSeats-error" class="field-error">{searchFormErrors.minSeats}</p>
+              )}
+            </div>
+            <div class="field">
+              <label for="search-maxSeats">Seats at most (optional)</label>
+              <input
+                id="search-maxSeats"
+                name="maxSeats"
+                type="number"
+                min="1"
+                placeholder="e.g. 6"
+                value={prefillMaxSeats}
+                aria-describedby={searchFormErrors.maxSeats ? "search-maxSeats-error" : undefined}
+              />
+              {searchFormErrors.maxSeats && (
+                <p id="search-maxSeats-error" class="field-error">{searchFormErrors.maxSeats}</p>
+              )}
+            </div>
+          </div>
 
-        <label for="bookedBy">Your name</label>
-        <input
-          id="bookedBy"
-          name="bookedBy"
-          required
-          maxlength="200"
-          placeholder="Jiaao"
-          value={prefillBookedBy}
-        />
+          <fieldset class="equipment-fieldset">
+            <legend>Equipment needed</legend>
+            {EQUIPMENT_TAGS.map((tag) => (
+              <label class="checkbox-label">
+                <input type="checkbox" name="equipment" value={tag.id} checked={prefillEquipment.has(tag.id)} />
+                {tag.label}
+                {tag.hard && <span class="required-note">(required, not just preferred)</span>}
+              </label>
+            ))}
+          </fieldset>
 
-        <label for="startsAt">Starts</label>
-        <input id="startsAt" name="startsAt" type="datetime-local" required value={prefillStartsAt} />
-
-        <label for="endsAt">Ends</label>
-        <input id="endsAt" name="endsAt" type="datetime-local" required value={prefillEndsAt} />
-
-        <label for="minSeats">Seats at least</label>
-        <input id="minSeats" name="minSeats" type="number" min="1" placeholder="e.g. 4" value={prefillMinSeats} />
-
-        <label for="maxSeats">Seats at most</label>
-        <input id="maxSeats" name="maxSeats" type="number" min="1" placeholder="e.g. 6" value={prefillMaxSeats} />
-
-        <fieldset class="equipment-fieldset">
-          <legend>Equipment needed (used when recommending a room)</legend>
-          {EQUIPMENT_TAGS.map((tag) => (
-            <label class="checkbox-label">
-              <input type="checkbox" name="equipment" value={tag.id} checked={prefillEquipment.has(tag.id)} />
-              {tag.label}
-            </label>
-          ))}
-        </fieldset>
-
-        <button>Book it</button>
-      </form>
+          <button class="button-primary">Find available rooms</button>
+        </form>
+      </section>
 
       {
         isSearching && (
-          <section aria-labelledby="suggestions-heading" class="suggestions">
+          <section
+            id="suggestions"
+            aria-labelledby="suggestions-heading"
+            class="suggestions"
+            data-room-ids={[...exactMatches, ...closeMatches].map((m) => m.room.id).join(",")}
+            data-window-start={prefillStartsAt}
+            data-window-end={prefillEndsAt}
+          >
             <h2 id="suggestions-heading">Suggested rooms</h2>
-            {suggestions.length === 0 ? (
-              <p>No rooms are free for that time — try a wider window or fewer requirements.</p>
-            ) : (
-              <ul class="suggestion-list">
-                {suggestions.map(({ room, matchedEquipment }) => (
-                  <li class="suggestion">
-                    <a href={suggestionHref(room.id)}>
-                      <strong>{room.name}</strong> — {room.building}, seats {room.capacity}
-                    </a>
-                    {roomEquipment(room).length > 0 && (
-                      <div class="tags">
-                        {roomEquipment(room).map((tagId) => (
-                          <span class={`tag ${matchedEquipment.includes(tagId) ? "tag-matched" : ""}`}>
-                            {equipmentLabel(tagId)}
-                          </span>
-                        ))}
+            <p class="stale-notice" hidden>
+              Someone just booked a room shown below — <a href={`${Astro.url.pathname}${Astro.url.search}`}>refresh to see current availability</a>.
+            </p>
+            {failReason && (
+              <p class="no-results">
+                {failReason === "capacity" &&
+                  `No room seats that many people — the largest room seats ${failLargestCapacity}. Try a smaller group.`}
+                {failReason === "requirements" &&
+                  `A room big enough exists, but none of them has ${requestedHardTags.map((id) => equipmentLabel(id)).join(", ")}. Try dropping a required item.`}
+                {failReason === "availability" &&
+                  "A room that fits shows up, but every one of them is already booked for that time — try a different time slot."}
+              </p>
+            )}
+            {!failReason && exactMatches.length === 0 && closeMatches.length === 0 && (
+              <p class="no-results">No rooms are free for that time.</p>
+            )}
+            {exactMatches.length > 0 && (
+              <>
+                <h3 class="suggestion-group-heading">Exact matches</h3>
+                <ul class="suggestion-list">
+                  {exactMatches.map(({ room }) => (
+                    <li class="suggestion">
+                      <div>
+                        <strong>{room.name}</strong> — {room.building}, seats {room.capacity}
+                        {roomEquipment(room).length > 0 && (
+                          <div class="tags">
+                            {roomEquipment(room).map((tagId) => (
+                              <span class="tag tag-matched">{equipmentLabel(tagId)}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {prefillEquipment.size > 0 && (
-                      <p class="match-note">
-                        Matches {matchedEquipment.length} of {prefillEquipment.size} requested
-                      </p>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      <a href={selectRoomHref(room.id)} class="button-secondary">Select this room</a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {closeMatches.length > 0 && (
+              <>
+                <h3 class="suggestion-group-heading">Close matches</h3>
+                <ul class="suggestion-list">
+                  {closeMatches.map(({ room, missingEquipment, overshoot }) => (
+                    <li class="suggestion">
+                      <div>
+                        <strong>{room.name}</strong> — {room.building}, seats {room.capacity}
+                        <div class="close-match-reasons">
+                          {overshoot > 0 && <span class="tag tag-note">{overshoot} more seats than requested</span>}
+                          {missingEquipment.map((tagId) => (
+                            <span class="tag tag-note">Missing: {equipmentLabel(tagId)}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <a href={selectRoomHref(room.id)} class="button-secondary">Select this room</a>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
           </section>
         )
       }
 
+      <section id="book-form" aria-labelledby="book-heading">
+        <h2 id="book-heading">Confirm booking</h2>
+        <p class="hint">Already know the room? Fill this in directly — you don't have to search first.</p>
+        <form method="post" action="/api/bookings">
+          <div class="field">
+            <label for="book-roomId">Room</label>
+            <select
+              id="book-roomId"
+              name="roomId"
+              required
+              aria-describedby={bookFormErrors.roomId ? "book-roomId-error" : undefined}
+            >
+              <option value="" disabled selected={!selectedRoom} hidden>
+                Choose a room…
+              </option>
+              {rooms.map((room) => (
+                <option value={room.id} selected={room.id === selectedRoomId}>
+                  {room.name} ({room.building}, seats {room.capacity})
+                </option>
+              ))}
+            </select>
+            {bookFormErrors.roomId && <p id="book-roomId-error" class="field-error">{bookFormErrors.roomId}</p>}
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="book-startsAt">Starts (Canberra time)</label>
+              <input
+                id="book-startsAt"
+                name="startsAt"
+                type="datetime-local"
+                required
+                value={prefillStartsAt}
+                aria-describedby={bookFormErrors.startsAt ? "book-startsAt-error" : undefined}
+              />
+              {bookFormErrors.startsAt && <p id="book-startsAt-error" class="field-error">{bookFormErrors.startsAt}</p>}
+            </div>
+            <div class="field">
+              <label for="book-endsAt">Ends (Canberra time)</label>
+              <input
+                id="book-endsAt"
+                name="endsAt"
+                type="datetime-local"
+                required
+                value={prefillEndsAt}
+                aria-describedby={bookFormErrors.endsAt ? "book-endsAt-error" : undefined}
+              />
+              {bookFormErrors.endsAt && <p id="book-endsAt-error" class="field-error">{bookFormErrors.endsAt}</p>}
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="book-title">What for (optional)</label>
+            <input id="book-title" name="title" maxlength="200" placeholder="Honours seminar" value={prefillTitle} />
+          </div>
+
+          <div class="field">
+            <label for="book-bookedBy">Your name</label>
+            <input
+              id="book-bookedBy"
+              name="bookedBy"
+              required
+              maxlength="200"
+              placeholder="Jiaao"
+              value={prefillBookedBy}
+              aria-describedby={bookFormErrors.bookedBy ? "book-bookedBy-error" : undefined}
+            />
+            {bookFormErrors.bookedBy && <p id="book-bookedBy-error" class="field-error">{bookFormErrors.bookedBy}</p>}
+          </div>
+
+          <button class="button-primary">Confirm booking</button>
+        </form>
+      </section>
+
       <section aria-labelledby="rooms-heading">
         <h2 id="rooms-heading">Rooms</h2>
+        {hasTimeWindow && <p class="hint">Availability below is for the time you entered above (Canberra time).</p>}
         {
-          rooms.map((room) => (
-            <article class="room" data-room-id={room.id}>
-              <h3>
-                {room.name} <span class="room-meta">{room.building} &middot; seats {room.capacity}</span>
-              </h3>
-              {roomEquipment(room).length > 0 && (
-                <div class="tags">
-                  {roomEquipment(room).map((tagId) => (
-                    <span class="tag">{equipmentLabel(tagId)}</span>
+          rooms.map((room) => {
+            const booked = hasTimeWindow && isRoomBooked(room.id, prefillStartsAt, prefillEndsAt);
+            return (
+              <article class="room" data-room-id={room.id}>
+                <h3>
+                  {room.name} <span class="room-meta">{room.building} &middot; seats {room.capacity}</span>
+                </h3>
+                {roomEquipment(room).length > 0 && (
+                  <div class="tags">
+                    {roomEquipment(room).map((tagId) => (
+                      <span class="tag">{equipmentLabel(tagId)}</span>
+                    ))}
+                  </div>
+                )}
+                {hasTimeWindow && (
+                  <p class={`availability ${booked ? "availability-booked" : "availability-free"}`}>
+                    {booked ? "Booked for part of your selected time" : "Available for your selected time"}
+                  </p>
+                )}
+                <ul class="bookings" data-room-bookings={room.id}>
+                  {(bookingsByRoom.get(room.id) ?? []).map((booking) => (
+                    <li id={`booking-${booking.id}`} data-starts-at={booking.startsAt}>
+                      <strong>{booking.title ?? "Untitled booking"}</strong> — {formatSlot(booking.startsAt, booking.endsAt)}
+                      <span class="booked-by"> (booked by {booking.bookedBy})</span>
+                    </li>
                   ))}
-                </div>
-              )}
-              <ul class="bookings" data-room-bookings={room.id}>
-                {(bookingsByRoom.get(room.id) ?? []).map((booking) => (
-                  <li>
-                    <strong>{booking.title ?? "Untitled booking"}</strong> — {formatSlot(booking.startsAt, booking.endsAt)}
-                    <span class="booked-by"> (booked by {booking.bookedBy})</span>
-                  </li>
-                ))}
-                {(bookingsByRoom.get(room.id) ?? []).length === 0 && <li class="empty">No bookings yet</li>}
-              </ul>
-            </article>
-          ))
+                  {(bookingsByRoom.get(room.id) ?? []).length === 0 && <li class="empty">No bookings yet</li>}
+                </ul>
+              </article>
+            );
+          })
         }
       </section>
     </main>
     <script>
       // The live half of the demo: subscribe to the SSE stream and drop each
-      // new booking into its room's list as it arrives. The form itself needs
-      // none of this — its POST + redirect re-renders the submitting tab from
-      // SQLite; this stream is how every *other* tab finds out.
+      // new booking into its room's list, in the same start-time order a
+      // fresh page load would render it in — the form itself needs none of
+      // this, its POST + redirect re-renders the submitting tab from SQLite;
+      // this stream is how every *other* tab finds out.
+      function formatSlot(startsAt: string, endsAt: string): string {
+        const fmt = (naive: string, opts: Intl.DateTimeFormatOptions) =>
+          new Date(`${naive}:00Z`).toLocaleString("en-AU", { ...opts, timeZone: "UTC" });
+        const dateOpts: Intl.DateTimeFormatOptions = { weekday: "short", day: "numeric", month: "short", year: "numeric" };
+        const timeOpts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+        const start = `${fmt(startsAt, dateOpts)}, ${fmt(startsAt, timeOpts)}`;
+        const sameDay = startsAt.slice(0, 10) === endsAt.slice(0, 10);
+        const end = sameDay ? fmt(endsAt, timeOpts) : `${fmt(endsAt, dateOpts)}, ${fmt(endsAt, timeOpts)}`;
+        return `${start} – ${end}`;
+      }
+
       const source = new EventSource("/api/events");
       source.addEventListener("message", (event) => {
         const booking = JSON.parse(event.data);
         const list = document.querySelector(`[data-room-bookings="${booking.roomId}"]`);
-        if (!list) return;
-        const empty = list.querySelector(".empty");
-        empty?.remove();
-        const item = document.createElement("li");
-        const start = new Date(booking.startsAt);
-        const end = new Date(booking.endsAt);
-        const slot = `${start.toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} – ${end.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}`;
-        item.innerHTML = `<strong></strong> — ${slot}<span class="booked-by"></span>`;
-        item.querySelector("strong")!.textContent = booking.title || "Untitled booking";
-        item.querySelector(".booked-by")!.textContent = ` (booked by ${booking.bookedBy})`;
-        list.appendChild(item);
+        if (list) {
+          list.querySelector(".empty")?.remove();
+          const item = document.createElement("li");
+          item.id = `booking-${booking.id}`;
+          item.dataset.startsAt = booking.startsAt;
+          const slot = formatSlot(booking.startsAt, booking.endsAt);
+          item.innerHTML = `<strong></strong> — ${slot}<span class="booked-by"></span>`;
+          item.querySelector("strong")!.textContent = booking.title || "Untitled booking";
+          item.querySelector(".booked-by")!.textContent = ` (booked by ${booking.bookedBy})`;
+
+          // Sorted insertion (ascending start time) so an SSE-appended row
+          // lands where a fresh page load would put it, not just at the end.
+          const existing = [...list.querySelectorAll("li[data-starts-at]")] as HTMLLIElement[];
+          const next = existing.find((li) => (li.dataset.startsAt ?? "") > booking.startsAt);
+          if (next) list.insertBefore(item, next);
+          else list.appendChild(item);
+        }
+
+        // If this booking lands inside the time window and among the rooms
+        // the visitor is currently looking at "Suggested rooms" for, those
+        // suggestions are now stale — say so rather than let them act on a
+        // recommendation that's no longer available (the server still
+        // re-checks on submit either way).
+        const suggestions = document.getElementById("suggestions");
+        if (suggestions) {
+          const roomIds = (suggestions.dataset.roomIds ?? "").split(",").filter(Boolean);
+          const windowStart = suggestions.dataset.windowStart ?? "";
+          const windowEnd = suggestions.dataset.windowEnd ?? "";
+          const overlaps = booking.startsAt < windowEnd && booking.endsAt > windowStart;
+          if (roomIds.includes(String(booking.roomId)) && overlaps) {
+            const notice = suggestions.querySelector(".stale-notice") as HTMLElement | null;
+            if (notice) notice.hidden = false;
+          }
+        }
       });
     </script>
   </body>
